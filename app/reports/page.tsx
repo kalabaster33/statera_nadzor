@@ -13,7 +13,7 @@ function monthKey(d: Date) {
 }
 function monthLabel(key: string) {
   const [y, m] = key.split('-').map(Number)
-  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
 
 /** Convert Blob to base64 string */
@@ -311,7 +311,7 @@ export default function ReportsPage() {
             {visits.map((v) => (
               <div key={v.id} className="card">
                 <div className="flex items-center justify-between text-xs text-text-muted">
-                  <span>{new Date(v.date).toLocaleDateString()}</span>
+                  <span>{new Date(v.date).toLocaleDateString('en-US')}</span>
                   <span>{v.photos.length} photos</span>
                 </div>
                 {v.notes && <p className="text-sm mt-2 line-clamp-3">{v.notes}</p>}

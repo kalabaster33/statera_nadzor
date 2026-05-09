@@ -181,74 +181,16 @@ values ('site-photos', 'site-photos', true)
 on conflict (id) do nothing;
 
 -- ============================================
--- ROW LEVEL SECURITY
+-- STORAGE POLICIES
 -- ============================================
-alter table projects enable row level security;
-alter table visits enable row level security;
-alter table photos enable row level security;
-
--- Projects policies
-drop policy if exists "Users can view own projects" on projects;
-create policy "Users can view own projects" on projects
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "Users can insert own projects" on projects;
-create policy "Users can insert own projects" on projects
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "Users can update own projects" on projects;
-create policy "Users can update own projects" on projects
-  for update using (auth.uid() = user_id);
-
-drop policy if exists "Users can delete own projects" on projects;
-create policy "Users can delete own projects" on projects
-  for delete using (auth.uid() = user_id);
-
--- Visits policies
-drop policy if exists "Users can view own visits" on visits;
-create policy "Users can view own visits" on visits
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "Users can insert own visits" on visits;
-create policy "Users can insert own visits" on visits
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "Users can update own visits" on visits;
-create policy "Users can update own visits" on visits
-  for update using (auth.uid() = user_id);
-
-drop policy if exists "Users can delete own visits" on visits;
-create policy "Users can delete own visits" on visits
-  for delete using (auth.uid() = user_id);
-
--- Photos policies (via visit ownership)
-drop policy if exists "Users can view photos of own visits" on photos;
-create policy "Users can view photos of own visits" on photos
-  for select using (
-    exists (select 1 from visits where visits.id = photos.visit_id and visits.user_id = auth.uid())
-  );
-
-drop policy if exists "Users can insert photos to own visits" on photos;
-create policy "Users can insert photos to own visits" on photos
-  for insert with check (
-    exists (select 1 from visits where visits.id = photos.visit_id and visits.user_id = auth.uid())
-  );
-
-drop policy if exists "Users can delete photos of own visits" on photos;
-create policy "Users can delete photos of own visits" on photos
-  for delete using (
-    exists (select 1 from visits where visits.id = photos.visit_id and visits.user_id = auth.uid())
-  );
-
--- Storage policies
-drop policy if exists "Authenticated users can upload photos" on storage.objects;
-create policy "Authenticated users can upload photos" on storage.objects
-  for insert to authenticated with check (bucket_id = 'site-photos');
+drop policy if exists "Public can upload photos" on storage.objects;
+create policy "Public can upload photos" on storage.objects
+  for insert to public with check (bucket_id = 'site-photos');
 
 drop policy if exists "Public can view photos" on storage.objects;
 create policy "Public can view photos" on storage.objects
   for select using (bucket_id = 'site-photos');
 
-drop policy if exists "Users can delete own photos" on storage.objects;
-create policy "Users can delete own photos" on storage.objects
-  for delete to authenticated using (bucket_id = 'site-photos' and auth.uid()::text = (storage.foldername(name))[1]);
+drop policy if exists "Public can delete photos" on storage.objects;
+create policy "Public can delete photos" on storage.objects
+  for delete to public using (bucket_id = 'site-photos');

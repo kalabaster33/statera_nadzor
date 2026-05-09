@@ -25,8 +25,6 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
   if (!db || !navigator.onLine) return { synced: 0, failed: 0 }
 
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { synced: 0, failed: 0 }
 
   const pending = await getPendingVisits()
   let synced = 0
@@ -40,7 +38,6 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
       const { data: visit, error: visitErr } = await supabase
         .from('visits')
         .insert({
-          user_id: user.id,
           project_id: q.project_id,
           date: q.date,
           weather: q.weather,
@@ -60,7 +57,7 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
       for (let i = 0; i < q.photos.length; i++) {
         const { blob, hiResBlob, caption } = q.photos[i]
         const ts = `${Date.now()}-${i}`
-        const basePath = `${user.id}/${visit.id}/${ts}`
+        const basePath = `anonymous/${visit.id}/${ts}`
 
         // Compressed upload (always)
         const compressedPath = `${basePath}.jpg`

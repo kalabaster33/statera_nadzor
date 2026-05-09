@@ -35,7 +35,7 @@ export default function HomePage() {
         <p className="text-xs font-mono uppercase tracking-wider text-accent">Nadzor</p>
         <h1 className="text-2xl font-bold mt-1">Site Supervision</h1>
         <p className="text-sm text-text-secondary mt-1">
-          {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </p>
       </header>
 
@@ -87,7 +87,7 @@ export default function HomePage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{v.project?.name ?? 'Unknown project'}</p>
                   <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
-                    <span>{new Date(v.date).toLocaleDateString()}</span>
+                    <span>{new Date(v.date).toLocaleDateString('en-US')}</span>
                     {v.weather && <span>· {v.weather}</span>}
                   </div>
                   {v.notes && (

@@ -19,13 +19,7 @@ export default function NewProjectPage() {
     setError(null)
     startTransition(async () => {
       const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        setError('Please sign in first')
-        return
-      }
       const { error: err } = await supabase.from('projects').insert({
-        user_id: user.id,
         name: name.trim(),
         location: location.trim() || null,
         client_info: clientInfo.trim() || null,
