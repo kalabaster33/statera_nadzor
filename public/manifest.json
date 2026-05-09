@@ -1,0 +1,33 @@
+{
+  "name": "Nadzor — Construction Supervision",
+  "short_name": "Nadzor",
+  "description": "Site visit logs and monthly reports for civil engineers",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0e14",
+  "theme_color": "#0a0e14",
+  "categories": ["productivity", "business"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Visit",
+      "short_name": "New Visit",
+      "description": "Log a new site visit",
+      "url": "/visits/new"
+    }
+  ]
+}

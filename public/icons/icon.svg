@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0a0e14"/>
+  <g fill="#FFB020">
+    <path d="M256 96 L416 192 L416 416 L96 416 L96 192 Z" stroke="#FFB020" stroke-width="16" fill="none"/>
+    <circle cx="256" cy="280" r="48"/>
+    <rect x="232" y="328" width="48" height="64"/>
+  </g>
+  <text x="256" y="464" text-anchor="middle" fill="#e8eef5" font-family="system-ui" font-size="48" font-weight="700">NADZOR</text>
+</svg>
