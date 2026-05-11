@@ -59,6 +59,17 @@ create table if not exists photos (
   created_at timestamptz default now()
 );
 
+-- Project Documents
+create table if not exists project_documents (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  name text not null,
+  storage_url text not null,
+  storage_path text not null,
+  size_bytes bigint,
+  created_at timestamptz default now()
+);
+
 -- Indexes for performance
 create index if not exists idx_visits_project_id on visits(project_id);
 create index if not exists idx_visits_date on visits(date desc);
@@ -66,6 +77,7 @@ create index if not exists idx_visits_user_id on visits(user_id);
 create index if not exists idx_visits_record_status on visits(record_status);
 create index if not exists idx_photos_visit_id on photos(visit_id);
 create index if not exists idx_projects_user_id on projects(user_id);
+create index if not exists idx_project_documents_project_id on project_documents(project_id);
 
 -- ============================================
 -- MIGRATION: add new columns to existing tables
@@ -194,3 +206,22 @@ create policy "Public can view photos" on storage.objects
 drop policy if exists "Public can delete photos" on storage.objects;
 create policy "Public can delete photos" on storage.objects
   for delete to public using (bucket_id = 'site-photos');
+
+-- ============================================
+-- PROJECT DOCUMENTS STORAGE BUCKET
+-- ============================================
+insert into storage.buckets (id, name, public)
+values ('project-documents', 'project-documents', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Public can upload documents" on storage.objects;
+create policy "Public can upload documents" on storage.objects
+  for insert to public with check (bucket_id = 'project-documents');
+
+drop policy if exists "Public can view documents" on storage.objects;
+create policy "Public can view documents" on storage.objects
+  for select using (bucket_id = 'project-documents');
+
+drop policy if exists "Public can delete documents" on storage.objects;
+create policy "Public can delete documents" on storage.objects
+  for delete to public using (bucket_id = 'project-documents');

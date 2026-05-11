@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { useProjects } from '@/lib/ProjectsContext'
 
 export default function NewProjectPage() {
   const router = useRouter()
+  const { invalidate } = useProjects()
   const [pending, startTransition] = useTransition()
   const [name, setName] = useState('')
   const [location, setLocation] = useState('')
@@ -25,7 +27,7 @@ export default function NewProjectPage() {
         client_info: clientInfo.trim() || null,
       })
       if (err) setError(err.message)
-      else router.push('/projects')
+      else { invalidate(); router.push('/projects') }
     })
   }
 

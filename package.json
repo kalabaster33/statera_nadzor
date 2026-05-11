@@ -9,17 +9,19 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/generative-ai": "^0.24.1",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
     "browser-image-compression": "^2.0.2",
     "dexie": "^4.0.8",
     "jspdf": "^2.5.2",
     "lucide-react": "^0.454.0",
-    "resend": "^4.0.0",
     "next": "14.2.18",
+    "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "resend": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

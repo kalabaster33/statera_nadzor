@@ -1,6 +1,5 @@
 'use client'
 
-import imageCompression from 'browser-image-compression'
 import { createClient } from './supabase/client'
 import { db, getPendingVisits, markError, markSynced, markSyncing } from './offline-db'
 
@@ -14,6 +13,7 @@ const COMPRESSION_OPTS = {
 export async function compressPhoto(file: File | Blob): Promise<Blob> {
   try {
     const f = file instanceof File ? file : new File([file], 'photo.jpg', { type: 'image/jpeg' })
+    const imageCompression = (await import('browser-image-compression')).default
     return await imageCompression(f, COMPRESSION_OPTS)
   } catch (err) {
     console.warn('[sync] compression failed, using original', err)
@@ -120,5 +120,20 @@ export function initSyncEngine() {
       if (e.data?.type === 'SYNC_VISITS') trigger()
     })
   }
+}
+
+export async function uploadToStorage(blob: Blob, prefix: string): Promise<{ publicUrl: string; storagePath: string }> {
+  const supabase = createClient()
+  const ts = Date.now()
+  const storagePath = `${prefix}/${ts}.jpg`
+  
+  const { error } = await supabase.storage
+    .from('site-photos')
+    .upload(storagePath, blob, { contentType: 'image/jpeg', upsert: false })
+    
+  if (error) throw error
+  
+  const { data } = supabase.storage.from('site-photos').getPublicUrl(storagePath)
+  return { publicUrl: data.publicUrl, storagePath }
 }
 

@@ -24,6 +24,7 @@ import { syncPendingVisits } from '@/lib/sync'
 import { useGeolocation } from '@/lib/useGeolocation'
 import { useDraft } from '@/lib/useDraft'
 import { PhotoCapture, type LocalPhoto } from '@/components/PhotoCapture'
+import { useProjects } from '@/lib/ProjectsContext'
 import type { Project } from '@/lib/types'
 
 const WEATHER_OPTIONS = [
@@ -39,8 +40,7 @@ const WEATHER_OPTIONS = [
 export default function NewVisitPage() {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
-  const [projects, setProjects] = useState<Project[]>([])
-  const [loadingProjects, setLoadingProjects] = useState(true)
+  const { projects, loading: loadingProjects } = useProjects()
 
   // ── Form state ──────────────────────────────────────────────────────────────
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
@@ -136,19 +136,6 @@ export default function NewVisitPage() {
 
   // ── Geolocation ─────────────────────────────────────────────────────────────
   const { state: geoState, geo, capture: captureGeo } = useGeolocation(true) // auto-capture on mount
-
-  // ── Projects ────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('projects')
-      .select('*')
-      .order('name')
-      .then(({ data }) => {
-        if (data) setProjects(data)
-        setLoadingProjects(false)
-      })
-  }, [])
 
   function toggleWeather(value: string) {
     setWeather((w) => (w.includes(value) ? w.filter((x) => x !== value) : [...w, value]))

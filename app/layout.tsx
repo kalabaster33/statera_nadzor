@@ -4,6 +4,7 @@ import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister'
 import { SyncProvider } from '@/components/SyncProvider'
 import { BottomNav } from '@/components/BottomNav'
 import { OfflineBanner } from '@/components/OfflineBanner'
+import { ProjectsProvider } from '@/lib/ProjectsContext'
 
 export const metadata: Metadata = {
   title: 'Nadzor — Construction Supervision',
@@ -36,11 +37,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ServiceWorkerRegister />
         <SyncProvider />
         <OfflineBanner />
-        <main className="mx-auto max-w-2xl px-4 pb-safe-bottom">
-          {children}
-        </main>
-        <BottomNav />
+        <ProjectsProvider>
+          <main className="mx-auto max-w-2xl px-4 pb-safe-bottom">
+            {children}
+          </main>
+          <BottomNav />
+        </ProjectsProvider>
       </body>
     </html>
   )
 }
+

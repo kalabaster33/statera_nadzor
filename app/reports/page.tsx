@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Calendar, CheckCircle2, Download, Loader2, Mail, Sparkles } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { generateReportPDF } from '@/lib/pdf'
+import { useProjects } from '@/lib/ProjectsContext'
 import type { Project, Visit, Photo } from '@/lib/types'
 
 type FullVisit = Visit & { photos: Photo[] }
@@ -27,7 +27,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export default function ReportsPage() {
-  const [projects, setProjects]     = useState<Project[]>([])
+  const { projects } = useProjects()
   const [projectId, setProjectId]   = useState('')
   const [month, setMonth]           = useState(monthKey(new Date()))
   const [visits, setVisits]         = useState<FullVisit[]>([])
@@ -43,19 +43,9 @@ export default function ReportsPage() {
   const [showEmailModal, setShowEmailModal]        = useState(false)
 
   useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('projects')
-      .select('*')
-      .order('name')
-      .then(({ data }) => {
-        if (data) {
-          setProjects(data)
-          if (data.length > 0 && !projectId) setProjectId(data[0].id)
-        }
-      })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (projects.length > 0 && !projectId) setProjectId(projects[0].id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects])
 
   useEffect(() => {
     if (!projectId || !month) return
@@ -109,6 +99,9 @@ export default function ReportsPage() {
   /** Build the PDF blob — shared between download and email */
   async function buildPDF(): Promise<Blob> {
     if (!project) throw new Error('No project selected')
+    // Lazy load the heavy pdf generator ONLY when exporting
+    const { generateReportPDF } = await import('@/lib/pdf')
+    
     return generateReportPDF({
       project,
       visits,
@@ -176,7 +169,7 @@ export default function ReportsPage() {
     }
   }
 
-  const totalPhotos = visits.reduce((acc, v) => acc + v.photos.length, 0)
+  const totalPhotos = useMemo(() => visits.reduce((acc, v) => acc + v.photos.length, 0), [visits])
 
   return (
     <div className="py-5 space-y-5">

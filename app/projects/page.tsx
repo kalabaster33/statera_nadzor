@@ -1,26 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Plus, MapPin, FolderOpen } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
-import type { Project } from '@/lib/types'
+import { useProjects } from '@/lib/ProjectsContext'
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('projects')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        if (data) setProjects(data)
-        setLoading(false)
-      })
-  }, [])
+  const { projects, loading } = useProjects()
 
   return (
     <div className="py-5 space-y-4">
@@ -44,7 +29,7 @@ export default function ProjectsPage() {
       ) : (
         <div className="space-y-2">
           {projects.map((p) => (
-            <div key={p.id} className="card">
+            <Link key={p.id} href={`/projects/${p.id}`} className="card block active:scale-[0.99] transition-transform">
               <h3 className="font-semibold">{p.name}</h3>
               {p.location && (
                 <p className="text-sm text-text-secondary mt-1 flex items-center gap-1.5">
@@ -54,7 +39,7 @@ export default function ProjectsPage() {
               {p.client_info && (
                 <p className="text-xs text-text-muted mt-1.5 line-clamp-2">{p.client_info}</p>
               )}
-            </div>
+            </Link>
           ))}
         </div>
       )}

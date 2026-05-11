@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 export const runtime = 'nodejs'
 
@@ -91,32 +91,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No notes provided' }, { status: 400 })
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY
+    const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'ANTHROPIC_API_KEY not configured' },
+        { error: 'GEMINI_API_KEY not configured' },
         { status: 500 }
       )
     }
 
-    const anthropic = new Anthropic({ apiKey })
-
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2400,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: buildUserPrompt(projectName, monthLabel, notes),
-        },
-      ],
+    const genAI = new GoogleGenerativeAI(apiKey)
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-pro',
+      systemInstruction: SYSTEM_PROMPT 
     })
 
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b: any) => b.text)
-      .join('\n')
+    const result = await model.generateContent(buildUserPrompt(projectName, monthLabel, notes))
+    const text = result.response.text()
 
     return NextResponse.json({ summary: text })
   } catch (err: any) {

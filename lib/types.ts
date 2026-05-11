@@ -10,6 +10,16 @@ export type Project = {
   updated_at: string
 }
 
+export type ProjectDocument = {
+  id: string
+  project_id: string
+  name: string
+  storage_url: string
+  storage_path: string
+  size_bytes: number | null
+  created_at: string
+}
+
 /**
  * DB row for the `visits` table.
  * `record_status` = the new Normal/Critical flag (renamed to avoid collision

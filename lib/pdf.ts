@@ -1,657 +1,411 @@
 'use client'
 
-import { jsPDF } from 'jspdf'
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import fontkit from '@pdf-lib/fontkit'
 import type { Project, Visit, Photo } from './types'
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const FIRM_NAME     = 'Statera Engineering'
-const FIRM_SUBTITLE = 'Техничка контрола и надзор на градежни објекти'
-const FIRM_LICENSE  = 'Лиценца бр. 03-ГН-0421'
-const FIRM_CONTACT  = 'www.statera.mk  ·  info@statera.mk  ·  +389 2 000 0000'
-
-// A4 dimensions, margins, content width
-const W  = 210
-const H  = 297
-const ML = 16   // left margin
-const MR = 16   // right margin
-const CW = W - ML - MR   // 178 mm content width
-const FOOTER_H = 22       // reserved footer height
-const CONTENT_BOTTOM = H - FOOTER_H  // y limit before footer
-
-// Brand palette
-const C = {
-  ink:         [15,  20,  30 ] as const,   // near-black text
-  mid:         [80,  88, 100 ] as const,   // secondary text
-  muted:       [150, 158, 170] as const,   // captions / rules
-  rule:        [220, 224, 230] as const,   // hairlines
-  bgLight:     [248, 249, 251] as const,   // table zebra
-  headerBg:    [10,  16,  28 ] as const,   // header strip bg
-  accent:      [255, 176,  32] as const,   // brand gold
-  accentText:  [10,  16,  28 ] as const,   // text on gold bg
-  green:       [0,  168, 107 ] as const,   // status OK
-  greenBg:     [220, 247, 238] as const,
-  red:         [220,  53,  69] as const,   // status Critical
-  redBg:       [252, 228, 231] as const,
-  yellow:      [230, 162,   0] as const,   // status Warning
-  yellowBg:    [255, 243, 205] as const,
-  logoBox:     [30,  40,  58 ] as const,   // logo placeholder box
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export type ReportInput = {
-  project:    Project
-  visits:     (Visit & { photos: Photo[] })[]
+  project: Project
+  visits: (Visit & { photos: Photo[] })[]
   monthLabel: string
-  summary:    string
+  summary: string
 }
 
-type RGB = readonly [number, number, number]
+const FIRM = 'Statera Engineering'
+const FIRM_SUBTITLE = 'Техничка контрола и надзор на градежни објекти'
+const FIRM_LICENSE = 'Лиценца бр. 03-ГН-0421'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Brand colors as pdf-lib rgb
+const C = {
+  ink: rgb(0.06, 0.08, 0.12),
+  mid: rgb(0.31, 0.34, 0.39),
+  muted: rgb(0.59, 0.62, 0.67),
+  rule: rgb(0.86, 0.88, 0.90),
+  bgLight: rgb(0.97, 0.98, 0.99),
+  headerBg: rgb(0.04, 0.06, 0.11),
+  accent: rgb(1.0, 0.69, 0.13),
+  white: rgb(1, 1, 1),
+  green: rgb(0.0, 0.66, 0.42),
+  greenBg: rgb(0.86, 0.97, 0.93),
+  red: rgb(0.86, 0.21, 0.27),
+  redBg: rgb(0.99, 0.89, 0.91),
+}
 
-/** Fetch a remote image and return base64 data + natural dimensions */
-async function loadImage(url: string): Promise<{ data: string; w: number; h: number } | null> {
+async function fetchFont(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url)
+  return res.arrayBuffer()
+}
+
+async function loadImageBytes(url: string): Promise<{ bytes: Uint8Array; isPng: boolean } | null> {
   try {
-    const res  = await fetch(url, { mode: 'cors' })
-    const blob = await res.blob()
-    const data = await new Promise<string>((resolve, reject) => {
-      const r = new FileReader()
-      r.onload  = () => resolve(r.result as string)
-      r.onerror = reject
-      r.readAsDataURL(blob)
-    })
-    const dims = await new Promise<{ w: number; h: number }>((resolve) => {
-      const img   = new Image()
-      img.onload  = () => resolve({ w: img.width, h: img.height })
-      img.onerror = () => resolve({ w: 4, h: 3 })
-      img.src     = data
-    })
-    return { data, ...dims }
+    const res = await fetch(url, { mode: 'cors' })
+    const buf = await res.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50
+    return { bytes, isPng }
   } catch {
     return null
   }
 }
 
-/** Derive overall status from visits array */
-function overallStatus(visits: (Visit & { photos: Photo[] })[]) {
-  const hasCritical = visits.some(
-    (v) => (v as any).record_status === 'Critical' || (v as any).record_status === 'Red'
-  )
-  if (hasCritical) return 'Critical'
-  return 'Normal'
-}
-
-/** Return color triple for a status string */
-function statusColors(status: string): { dot: RGB; bg: RGB; text: RGB; label: string } {
-  switch (status) {
-    case 'Critical':
-    case 'Red':
-      return { dot: C.red,    bg: C.redBg,    text: C.red,    label: 'КРИТИЧНО' }
-    case 'Warning':
-    case 'Yellow':
-      return { dot: C.yellow, bg: C.yellowBg, text: C.yellow, label: 'ПРЕДУПРЕДУВАЊЕ' }
-    default:
-      return { dot: C.green,  bg: C.greenBg,  text: C.green,  label: 'УРЕДНО' }
-  }
-}
-
-/** Draw a filled circle status dot */
-function dot(doc: jsPDF, x: number, y: number, color: RGB) {
-  doc.setFillColor(...color)
-  doc.circle(x, y, 1.6, 'F')
-}
-
-/** Draw a status pill (dot + label text inside a rounded rect) */
-function statusPill(
-  doc: jsPDF,
-  x: number,
-  cy: number,             // vertical centre
-  status: string,
-  fontSize = 8
-) {
-  const { dot: dotC, bg, text, label } = statusColors(status)
-  const pill_h = fontSize * 0.45 + 3.6
-  const pill_w = fontSize * label.length * 0.22 + 10
-
-  doc.setFillColor(...bg)
-  doc.roundedRect(x, cy - pill_h / 2, pill_w, pill_h, 1.5, 1.5, 'F')
-  dot(doc, x + 3.5, cy, dotC)
-  doc.setFontSize(fontSize)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(...text)
-  doc.text(label, x + 6.5, cy + fontSize * 0.13)
-  return pill_w
-}
-
-/** Draw a horizontal rule */
-function rule(doc: jsPDF, y: number, lw = 0.25) {
-  doc.setDrawColor(...C.rule)
-  doc.setLineWidth(lw)
-  doc.line(ML, y, W - MR, y)
-}
-
-/** Section heading */
-function sectionHeading(doc: jsPDF, text: string, y: number): number {
-  // Gold left bar
-  doc.setFillColor(...C.accent)
-  doc.rect(ML, y - 3.5, 2.5, 5.5, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(11)
-  doc.setTextColor(...C.ink)
-  doc.text(text, ML + 5, y)
-  return y + 8
-}
-
-/** Ensure there's at least `need` mm before the content bottom; add page if not */
-function ensureSpace(doc: jsPDF, y: number, need: number): number {
-  if (y + need > CONTENT_BOTTOM) {
-    doc.addPage()
-    return ML + 2
-  }
-  return y
-}
-
-// ─── Header (repeated on every page via stamp pass) ───────────────────────────
-
-function drawPageHeader(doc: jsPDF, isFirstPage: boolean) {
-  if (isFirstPage) return   // first page has its own full cover header
-  // Compact repeat header for continuation pages
-  doc.setFillColor(...C.headerBg)
-  doc.rect(0, 0, W, 10, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7.5)
-  doc.setTextColor(...C.accent)
-  doc.text(FIRM_NAME, ML, 6.5)
-  doc.setFont('helvetica', 'normal')
-  doc.setTextColor(180, 188, 200)
-  doc.text(FIRM_SUBTITLE, ML + 38, 6.5)
-}
-
-// ─── Footer stamp (applied retroactively on every page) ──────────────────────
-
-function stampFooters(doc: jsPDF, monthLabel: string, generatedAt: string, totalPages: number) {
-  for (let p = 1; p <= totalPages; p++) {
-    doc.setPage(p)
-
-    // Footer background strip
-    doc.setFillColor(248, 249, 251)
-    doc.rect(0, H - FOOTER_H, W, FOOTER_H, 'F')
-    rule(doc, H - FOOTER_H)
-
-    // Left: firm + timestamp
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7.5)
-    doc.setTextColor(...C.muted)
-    doc.text(`${FIRM_NAME}  ·  ${FIRM_LICENSE}`, ML, H - 14)
-    doc.text(`Генерирано: ${generatedAt}`, ML, H - 9)
-
-    // Centre: digital signature placeholder
-    const sigX = W / 2
-    doc.setFont('helvetica', 'italic')
-    doc.setFontSize(7)
-    doc.setTextColor(...C.muted)
-    doc.text('Дигитален потпис / Печат на надзорен инженер', sigX, H - 14, { align: 'center' })
-    doc.setDrawColor(...C.rule)
-    doc.setLineWidth(0.3)
-    doc.line(sigX - 28, H - 9, sigX + 28, H - 9)
-
-    // Right: page numbering
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(8)
-    doc.setTextColor(...C.mid)
-    doc.text(`${p} / ${totalPages}`, W - MR, H - 9, { align: 'right' })
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7)
-    doc.setTextColor(...C.muted)
-    doc.text('Страница', W - MR, H - 14, { align: 'right' })
-  }
-}
-
-// ─── Cover page ───────────────────────────────────────────────────────────────
-
-function drawCoverHeader(doc: jsPDF, project: Project, monthLabel: string, visits: (Visit & { photos: Photo[] })[]) {
-  // ── Dark top banner ──────────────────────────────────────────────────────
-  const bannerH = 52
-  doc.setFillColor(...C.headerBg)
-  doc.rect(0, 0, W, bannerH, 'F')
-
-  // Logo placeholder box (left side)
-  doc.setFillColor(...C.logoBox)
-  doc.roundedRect(ML, 8, 28, 18, 2, 2, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7)
-  doc.setTextColor(...C.accent)
-  doc.text('ЛОГО', ML + 14, 17.5, { align: 'center' })
-  doc.setFontSize(5.5)
-  doc.setTextColor(100, 115, 140)
-  doc.text('[REPLACE WITH LOGO]', ML + 14, 21.5, { align: 'center' })
-
-  // Firm name + subtitle (right of logo)
-  const tx = ML + 33
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(16)
-  doc.setTextColor(...C.accent)
-  doc.text(FIRM_NAME.toUpperCase(), tx, 17)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  doc.setTextColor(180, 190, 210)
-  doc.text(FIRM_SUBTITLE, tx, 22.5)
-
-  // License number — top-right corner
-  doc.setFontSize(7.5)
-  doc.setTextColor(120, 135, 160)
-  doc.text(FIRM_LICENSE, W - MR, 10, { align: 'right' })
-  doc.text(FIRM_CONTACT,  W - MR, 15, { align: 'right' })
-
-  // Gold accent bar at bottom of banner
-  doc.setFillColor(...C.accent)
-  doc.rect(0, bannerH - 2.5, W, 2.5, 'F')
-
-  // ── Report title block ───────────────────────────────────────────────────
-  let y = bannerH + 12
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(22)
-  doc.setTextColor(...C.ink)
-  doc.text('МЕСЕЧЕН ИЗВЕШТАЈ ЗА НАДЗОР', ML, y)
-
-  y += 7
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(12)
-  doc.setTextColor(...C.mid)
-  doc.text(`Период: ${monthLabel}`, ML, y)
-
-  // ── Project info card ────────────────────────────────────────────────────
-  y += 10
-  const cardH = 38
-  doc.setFillColor(...C.bgLight)
-  doc.setDrawColor(...C.rule)
-  doc.setLineWidth(0.3)
-  doc.roundedRect(ML, y, CW, cardH, 2, 2, 'FD')
-
-  // Left column of card
-  const col1x = ML + 5
-  const col2x = ML + 55
-  let cy = y + 7
-
-  const infoRow = (label: string, value: string, bold = false) => {
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(8)
-    doc.setTextColor(...C.mid)
-    doc.text(label, col1x, cy)
-    doc.setFont('helvetica', bold ? 'bold' : 'normal')
-    doc.setFontSize(9)
-    doc.setTextColor(...C.ink)
-    const lines = doc.splitTextToSize(value || '—', CW - 45)
-    doc.text(lines, col2x, cy)
-    cy += Math.max(6, lines.length * 5)
-  }
-
-  infoRow('ПРОЕКТ', project.name, true)
-  infoRow('ЛОКАЦИЈА', project.location || '—')
-  infoRow('ИНВЕСТИТОР / КЛИЕНТ', project.client_info || '—')
-
-  // Right-side visit count badge
-  const badgeX = ML + CW - 26
-  const badgeY = y + 6
-  doc.setFillColor(...C.headerBg)
-  doc.roundedRect(badgeX, badgeY, 22, 22, 2, 2, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(18)
-  doc.setTextColor(...C.accent)
-  doc.text(String(visits.length), badgeX + 11, badgeY + 13, { align: 'center' })
-  doc.setFontSize(6.5)
-  doc.setTextColor(160, 175, 200)
-  doc.text('ПОСЕТИ', badgeX + 11, badgeY + 19, { align: 'center' })
-
-  return y + cardH + 6
-}
-
-// ─── Summary table ────────────────────────────────────────────────────────────
-
-function drawSummaryTable(doc: jsPDF, visits: (Visit & { photos: Photo[] })[], monthLabel: string, y: number): number {
-  y = ensureSpace(doc, y, 55)
-  y = sectionHeading(doc, 'ПРЕГЛЕД НА МЕСЕЦОТ', y)
-
-  const status  = overallStatus(visits)
-  const { label, dot: dotC, bg, text: textC } = statusColors(status)
-  const criticalCount = visits.filter((v) => (v as any).record_status === 'Critical').length
-  const normalCount   = visits.length - criticalCount
-  const totalPhotos   = visits.reduce((a, v) => a + v.photos.length, 0)
-
-  // Table columns: [label, value, width%]
-  type Col = { label: string; value: string; w: number; status?: string }
-  const cols: Col[] = [
-    { label: 'МЕСЕЦ',            value: monthLabel,          w: 45 },
-    { label: 'БРОЈ НА ПОСЕТИ',   value: String(visits.length), w: 35 },
-    { label: 'УРЕДНО / КРИТИЧНО', value: `${normalCount} / ${criticalCount}`, w: 40 },
-    { label: 'ВКУПНО ФОТОГРАФИИ', value: String(totalPhotos), w: 38 },
-    { label: 'ОПШТ СТАТУС',      value: label,               w: 38, status },
-  ]
-
-  const rowH   = 10
-  const hdrH   = 7
-  const tblW   = CW
-  let   cx     = ML
-
-  // Header row
-  doc.setFillColor(...C.headerBg)
-  doc.rect(ML, y, tblW, hdrH, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7)
-  doc.setTextColor(160, 175, 200)
-
-  for (const col of cols) {
-    const colW = (col.w / 196) * tblW
-    doc.text(col.label, cx + 3, y + 4.8)
-    cx += colW
-  }
-  y += hdrH
-
-  // Data row
-  cx = ML
-  doc.setFillColor(255, 255, 255)
-  doc.setDrawColor(...C.rule)
-  doc.setLineWidth(0.25)
-  doc.rect(ML, y, tblW, rowH, 'FD')
-
-  for (const col of cols) {
-    const colW = (col.w / 196) * tblW
-    if (col.status) {
-      // Draw pill in cell
-      doc.setFillColor(...bg)
-      doc.roundedRect(cx + 2, y + 2, colW - 5, 6, 1.5, 1.5, 'F')
-      dot(doc, cx + 5.5, y + 5, dotC)
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(7.5)
-      doc.setTextColor(...textC)
-      doc.text(col.value, cx + 8.5, y + 5.8)
-    } else {
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(9)
-      doc.setTextColor(...C.ink)
-      doc.text(col.value, cx + 3, y + 6.5)
-    }
-    // Column divider
-    doc.setDrawColor(...C.rule)
-    doc.setLineWidth(0.2)
-    doc.line(cx + colW, y, cx + colW, y + rowH)
-    cx += colW
-  }
-  y += rowH + 8
-  return y
-}
-
-// ─── Visit log table ──────────────────────────────────────────────────────────
-
-function drawVisitLog(doc: jsPDF, visits: (Visit & { photos: Photo[] })[], y: number): number {
-  y = ensureSpace(doc, y, 40)
-  y = sectionHeading(doc, 'ДНЕВНИК НА ТЕРЕНСКИ ПОСЕТИ', y)
-
-  // Column definitions (mm from ML, label, width)
-  const cols = [
-    { label: 'ДАТУМ',     x: ML,      w: 24 },
-    { label: 'ВРЕМЕНСКИ', x: ML + 24, w: 30 },
-    { label: 'СТАТУС',    x: ML + 54, w: 30 },
-    { label: 'БЕЛЕШКИ',   x: ML + 84, w: CW - 84 },
-  ]
-
-  const hdrH = 7
-  doc.setFillColor(...C.headerBg)
-  doc.rect(ML, y, CW, hdrH, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7)
-  doc.setTextColor(160, 175, 200)
-  for (const c of cols) doc.text(c.label, c.x + 2, y + 4.8)
-  y += hdrH
-
-  doc.setFont('helvetica', 'normal')
-  let rowIdx = 0
-  for (const v of visits) {
-    const noteLines  = doc.splitTextToSize(v.notes || '—', cols[3].w - 4)
-    const rowH       = Math.max(9, noteLines.length * 4.5 + 4)
-
-    y = ensureSpace(doc, y, rowH + 1)
-
-    // Zebra
-    if (rowIdx % 2 === 0) {
-      doc.setFillColor(...C.bgLight)
-      doc.rect(ML, y, CW, rowH, 'F')
-    }
-
-    // Date
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(8.5)
-    doc.setTextColor(...C.ink)
-    doc.text(v.date, cols[0].x + 2, y + 6)
-
-    // Weather
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8)
-    doc.setTextColor(...C.mid)
-    const weatherLines = doc.splitTextToSize(v.weather || '—', cols[1].w - 3)
-    doc.text(weatherLines, cols[1].x + 2, y + 6)
-
-    // Status pill
-    const vs = (v as any).record_status ?? 'Normal'
-    statusPill(doc, cols[2].x + 2, y + rowH / 2, vs, 7.5)
-
-    // Notes
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8.5)
-    doc.setTextColor(...C.ink)
-    doc.text(noteLines, cols[3].x + 2, y + 6)
-
-    // Row bottom rule
-    doc.setDrawColor(...C.rule)
-    doc.setLineWidth(0.2)
-    doc.line(ML, y + rowH, ML + CW, y + rowH)
-
-    y += rowH
-    rowIdx++
-  }
-  return y + 8
-}
-
-// ─── Technical narrative ──────────────────────────────────────────────────────
-
-function drawNarrative(doc: jsPDF, summary: string, y: number): number {
-  y = ensureSpace(doc, y, 30)
-  y = sectionHeading(doc, 'ТЕХНИЧКА НАРАЦИЈА', y)
-
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(10)
-  doc.setTextColor(...C.ink)
-
-  const paragraphs = summary
-    ? summary.split(/\n{1,}/).filter(Boolean)
-    : ['Нема генерирана техничка нарација.']
-
-  for (const para of paragraphs) {
-    // Detect section headings like "1. Напредок..." inside the narrative
-    const isHeading = /^\d+\.\s/.test(para)
-    if (isHeading) {
-      y = ensureSpace(doc, y, 16)
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(10)
-      doc.setTextColor(...C.ink)
-      const hlines = doc.splitTextToSize(para, CW)
-      doc.text(hlines, ML, y)
-      y += hlines.length * 5.5 + 2
-    } else {
-      const lines = doc.splitTextToSize(para, CW)
-      for (const line of lines) {
-        y = ensureSpace(doc, y, 6)
-        doc.setFont('helvetica', 'normal')
-        doc.setFontSize(10)
-        doc.setTextColor(...C.ink)
-        doc.text(line, ML, y)
-        y += 5.5
-      }
-      y += 3 // paragraph gap
-    }
-  }
-  return y + 6
-}
-
-// ─── Photo grid (2 columns per row, rows stacked down the page) ──────────────
-
-async function drawPhotoAppendix(
-  doc: jsPDF,
-  visits: (Visit & { photos: Photo[] })[]
-): Promise<void> {
-  type TaggedPhoto = Photo & { visitDate: string; visitStatus: string; figIndex: number }
-
-  const allPhotos: TaggedPhoto[] = []
-  let figIdx = 1
-  for (const v of visits) {
-    for (const p of v.photos) {
-      allPhotos.push({
-        ...p,
-        visitDate:   v.date,
-        visitStatus: (v as any).record_status ?? 'Normal',
-        figIndex:    figIdx++,
-      })
-    }
-  }
-  if (allPhotos.length === 0) return
-
-  doc.addPage()
-
-  // Appendix title page header
-  doc.setFillColor(...C.headerBg)
-  doc.rect(0, 0, W, 10, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7.5)
-  doc.setTextColor(...C.accent)
-  doc.text(FIRM_NAME, ML, 6.5)
-
-  let y = 18
-  y = sectionHeading(doc, `ФОТОГРАФСКА ДОКУМЕНТАЦИЈА  (${allPhotos.length} фотографии)`, y)
-  y += 4
-
-  // Grid constants — 2 columns with a gutter
-  const COLS      = 2
-  const GUTTER    = 5                         // mm between columns
-  const CELL_W    = (CW - GUTTER * (COLS - 1)) / COLS  // ~86.5 mm
-  const IMG_H     = 62                        // image display height (fixed)
-  const CAP_H     = 12                        // caption area height
-  const CELL_H    = IMG_H + CAP_H             // total cell height
-
-  let col = 0
-
-  for (const p of allPhotos) {
-    const cellX = ML + col * (CELL_W + GUTTER)
-
-    // Does this cell fit on the current page?
-    if (y + CELL_H > CONTENT_BOTTOM - 4) {
-      doc.addPage()
-      // Compact continuation header
-      doc.setFillColor(...C.headerBg)
-      doc.rect(0, 0, W, 10, 'F')
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(7.5)
-      doc.setTextColor(...C.accent)
-      doc.text(FIRM_NAME, ML, 6.5)
-      y  = 16
-      col = 0
-    }
-
-    // ── Image area ──────────────────────────────────────────────────────────
-    // Light border / background for the image slot
-    doc.setFillColor(235, 238, 243)
-    doc.setDrawColor(...C.rule)
-    doc.setLineWidth(0.25)
-    doc.roundedRect(cellX, y, CELL_W, IMG_H, 1.5, 1.5, 'FD')
-
-    const img = await loadImage(p.storage_url)
-    if (img) {
-      const ratio  = img.w / img.h
-      let drawW    = CELL_W - 2
-      let drawH    = drawW / ratio
-      if (drawH > IMG_H - 2) { drawH = IMG_H - 2; drawW = drawH * ratio }
-      const drawX  = cellX + (CELL_W - drawW) / 2
-      const drawY  = y + (IMG_H - drawH) / 2
-      try {
-        doc.addImage(img.data, 'JPEG', drawX, drawY, drawW, drawH, undefined, 'MEDIUM')
-      } catch { /* skip bad image */ }
-    } else {
-      // Placeholder text if image failed to load
-      doc.setFont('helvetica', 'italic')
-      doc.setFontSize(8)
-      doc.setTextColor(...C.muted)
-      doc.text('[Сликата не е достапна]', cellX + CELL_W / 2, y + IMG_H / 2, { align: 'center' })
-    }
-
-    // Status indicator — small pill overlaid top-right of image
-    statusPill(doc, cellX + CELL_W - 27, y + 5.5, p.visitStatus, 6.5)
-
-    // ── Caption area ─────────────────────────────────────────────────────────
-    const capY = y + IMG_H
-    doc.setFillColor(250, 251, 252)
-    doc.setDrawColor(...C.rule)
-    doc.roundedRect(cellX, capY, CELL_W, CAP_H, 0, 0, 'FD')
-
-    // Figure number badge
-    doc.setFillColor(...C.headerBg)
-    doc.roundedRect(cellX + 2, capY + 2, 10, 8, 1, 1, 'F')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(7)
-    doc.setTextColor(...C.accent)
-    doc.text(`Сл.${p.figIndex}`, cellX + 7, capY + 6.8, { align: 'center' })
-
-    // Caption text
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7.5)
-    doc.setTextColor(...C.ink)
-    const capText  = p.caption || ''
-    const capLines = doc.splitTextToSize(capText, CELL_W - 16)
-    doc.text(capLines[0] ?? '', cellX + 14, capY + 5.5)
-
-    // Date line
-    doc.setFont('helvetica', 'italic')
-    doc.setFontSize(7)
-    doc.setTextColor(...C.muted)
-    doc.text(p.visitDate, cellX + 14, capY + 9.5)
-
-    // ── Advance grid position ─────────────────────────────────────────────
-    col++
-    if (col >= COLS) {
-      col  = 0
-      y   += CELL_H + 6  // row gap
-    }
-  }
-}
-
-// ─── Main export ──────────────────────────────────────────────────────────────
-
 export async function generateReportPDF(input: ReportInput): Promise<Blob> {
   const { project, visits, monthLabel, summary } = input
+
+  const pdfDoc = await PDFDocument.create()
+  pdfDoc.registerFontkit(fontkit)
+
+  // Fetch local TTF fonts which have full Cyrillic support and are compatible with fontkit
+  const [regularBytes, boldBytes] = await Promise.all([
+    fetchFont('/fonts/Roboto-Regular.ttf'),
+    fetchFont('/fonts/Roboto-Bold.ttf'),
+  ])
+
+  let fontR: any, fontB: any
+  try {
+    fontR = await pdfDoc.embedFont(regularBytes)
+    fontB = await pdfDoc.embedFont(boldBytes)
+  } catch (err) {
+    console.error('Failed to embed custom fonts:', err)
+    // Fallback to standard font (no Cyrillic, but at least renders something)
+    fontR = await pdfDoc.embedFont(StandardFonts.Helvetica)
+    fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  }
+
+  const W = 595.28 // A4 width in points
+  const H = 841.89 // A4 height in points
+  const ML = 45
+  const MR = 45
+  const CW = W - ML - MR
+  const FOOTER_H = 60
+
   const generatedAt = new Date().toLocaleString('mk-MK', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
 
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  // ── Page 1: cover header ────────────────────────────────────────────────────
-  let y = drawCoverHeader(doc, project, monthLabel, visits)
+  function addPage() {
+    const page = pdfDoc.addPage([W, H])
+    // Header bar
+    page.drawRectangle({ x: 0, y: H - 30, width: W, height: 30, color: C.headerBg })
+    page.drawText(FIRM, { x: ML, y: H - 20, size: 9, font: fontB, color: C.accent })
+    page.drawText(FIRM_SUBTITLE, { x: ML + 130, y: H - 20, size: 7, font: fontR, color: C.muted })
+    return page
+  }
 
-  // ── Summary table ───────────────────────────────────────────────────────────
-  y = drawSummaryTable(doc, visits, monthLabel, y)
+  function drawFooter(page: any, pageNum: number, total: number) {
+    page.drawRectangle({ x: 0, y: 0, width: W, height: FOOTER_H, color: C.bgLight })
+    page.drawLine({ start: { x: 0, y: FOOTER_H }, end: { x: W, y: FOOTER_H }, thickness: 0.5, color: C.rule })
+    page.drawText(`${FIRM}  ·  ${FIRM_LICENSE}`, { x: ML, y: FOOTER_H - 18, size: 7, font: fontR, color: C.muted })
+    page.drawText(`Генерирано: ${generatedAt}`, { x: ML, y: FOOTER_H - 30, size: 7, font: fontR, color: C.muted })
+    const pageStr = `${pageNum} / ${total}`
+    const pageW = fontB.widthOfTextAtSize(pageStr, 9)
+    page.drawText(pageStr, { x: W - MR - pageW, y: FOOTER_H - 25, size: 9, font: fontB, color: C.mid })
+  }
 
-  // ── Visit log ───────────────────────────────────────────────────────────────
-  y = drawVisitLog(doc, visits, y)
+  function wrapText(text: string, font: any, size: number, maxWidth: number): string[] {
+    if (!text) return ['—']
+    const words = text.split(' ')
+    const lines: string[] = []
+    let current = ''
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word
+      if (font.widthOfTextAtSize(test, size) > maxWidth && current) {
+        lines.push(current)
+        current = word
+      } else {
+        current = test
+      }
+    }
+    if (current) lines.push(current)
+    return lines.length > 0 ? lines : ['—']
+  }
 
-  // ── Technical narrative ─────────────────────────────────────────────────────
-  y = drawNarrative(doc, summary, y)
+  function statusLabel(status: string): string {
+    return status === 'Critical' ? 'КРИТИЧНО' : 'УРЕДНО'
+  }
 
-  // ── Photo appendix ──────────────────────────────────────────────────────────
-  await drawPhotoAppendix(doc, visits)
+  function statusColor(status: string) {
+    return status === 'Critical' ? C.red : C.green
+  }
 
-  // ── Stamp footers (retroactive — must be last) ──────────────────────────────
-  stampFooters(doc, monthLabel, generatedAt, doc.getNumberOfPages())
+  function statusBg(status: string) {
+    return status === 'Critical' ? C.redBg : C.greenBg
+  }
 
-  return doc.output('blob')
+  // ── Page 1 — Cover ───────────────────────────────────────────────────────────
+
+  const page1 = pdfDoc.addPage([W, H])
+
+  // Dark banner
+  page1.drawRectangle({ x: 0, y: H - 140, width: W, height: 140, color: C.headerBg })
+  // Gold bar at bottom of banner
+  page1.drawRectangle({ x: 0, y: H - 142, width: W, height: 4, color: C.accent })
+
+  // Firm name
+  page1.drawText(FIRM.toUpperCase(), { x: ML, y: H - 60, size: 22, font: fontB, color: C.accent })
+  page1.drawText(FIRM_SUBTITLE, { x: ML, y: H - 78, size: 9, font: fontR, color: rgb(0.7, 0.75, 0.85) })
+  page1.drawText(FIRM_LICENSE, { x: W - MR - fontR.widthOfTextAtSize(FIRM_LICENSE, 8), y: H - 50, size: 8, font: fontR, color: rgb(0.47, 0.53, 0.63) })
+
+  // Report title
+  const titleY = H - 180
+  page1.drawText('МЕСЕЧЕН ИЗВЕШТАЈ ЗА НАДЗОР', { x: ML, y: titleY, size: 20, font: fontB, color: C.ink })
+  page1.drawText(`Период: ${monthLabel}`, { x: ML, y: titleY - 22, size: 12, font: fontR, color: C.mid })
+
+  // Project info card
+  const cardY = H - 280
+  const cardH = 120
+  page1.drawRectangle({ x: ML, y: cardY, width: CW, height: cardH, color: C.bgLight, borderColor: C.rule, borderWidth: 0.5 })
+
+  const rowY = (i: number) => cardY + cardH - 28 - i * 26
+  const labelX = ML + 14
+  const valX = ML + 130
+
+  page1.drawText('ПРОЕКТ', { x: labelX, y: rowY(0), size: 8, font: fontB, color: C.mid })
+  page1.drawText(project.name || '—', { x: valX, y: rowY(0), size: 10, font: fontB, color: C.ink })
+
+  page1.drawText('ЛОКАЦИЈА', { x: labelX, y: rowY(1), size: 8, font: fontB, color: C.mid })
+  page1.drawText(project.location || '—', { x: valX, y: rowY(1), size: 9, font: fontR, color: C.ink })
+
+  page1.drawText('КЛИЕНТ', { x: labelX, y: rowY(2), size: 8, font: fontB, color: C.mid })
+  page1.drawText((project.client_info || '—').slice(0, 60), { x: valX, y: rowY(2), size: 9, font: fontR, color: C.ink })
+
+  // Visit count badge
+  const badgeX = ML + CW - 70
+  const badgeY = cardY + 20
+  page1.drawRectangle({ x: badgeX, y: badgeY, width: 56, height: 56, color: C.headerBg })
+  const countStr = String(visits.length)
+  const countW = fontB.widthOfTextAtSize(countStr, 28)
+  page1.drawText(countStr, { x: badgeX + (56 - countW) / 2, y: badgeY + 24, size: 28, font: fontB, color: C.accent })
+  const posLabel = 'ПОСЕТИ'
+  const posW = fontR.widthOfTextAtSize(posLabel, 7)
+  page1.drawText(posLabel, { x: badgeX + (56 - posW) / 2, y: badgeY + 10, size: 7, font: fontR, color: rgb(0.6, 0.69, 0.78) })
+
+  // ── Summary table ─────────────────────────────────────────────────────────────
+
+  let y = H - 310
+  const ovStatus = visits.some(v => (v as any).record_status === 'Critical') ? 'Critical' : 'Normal'
+  const totalPhotos = visits.reduce((a, v) => a + v.photos.length, 0)
+  const critCount = visits.filter(v => (v as any).record_status === 'Critical').length
+
+  // Section heading
+  page1.drawRectangle({ x: ML, y: y - 2, width: 6, height: 18, color: C.accent })
+  page1.drawText('ПРЕГЛЕД НА МЕСЕЦОТ', { x: ML + 12, y: y + 4, size: 11, font: fontB, color: C.ink })
+  y -= 30
+
+  const cols = [
+    { label: 'МЕСЕЦ', value: monthLabel, w: 130 },
+    { label: 'ПОСЕТИ', value: String(visits.length), w: 80 },
+    { label: 'УРЕДНО / КРИТИЧНО', value: `${visits.length - critCount} / ${critCount}`, w: 110 },
+    { label: 'ФОТОГРАФИИ', value: String(totalPhotos), w: 100 },
+    { label: 'ОПШТ СТАТУС', value: statusLabel(ovStatus), w: CW - 420, isStatus: true },
+  ]
+
+  const tblHdrH = 22
+  const tblRowH = 26
+  page1.drawRectangle({ x: ML, y: y - tblHdrH, width: CW, height: tblHdrH, color: C.headerBg })
+
+  let cx = ML
+  for (const col of cols) {
+    page1.drawText(col.label, { x: cx + 6, y: y - 14, size: 7, font: fontB, color: rgb(0.63, 0.69, 0.78) })
+    cx += col.w
+  }
+  y -= tblHdrH
+
+  page1.drawRectangle({ x: ML, y: y - tblRowH, width: CW, height: tblRowH, color: C.white, borderColor: C.rule, borderWidth: 0.5 })
+  cx = ML
+  for (const col of cols) {
+    if ((col as any).isStatus) {
+      page1.drawRectangle({ x: cx + 4, y: y - tblRowH + 6, width: col.w - 8, height: 14, color: statusBg(ovStatus) })
+      page1.drawText(col.value, { x: cx + 10, y: y - tblRowH + 11, size: 8, font: fontB, color: statusColor(ovStatus) })
+    } else {
+      page1.drawText(col.value, { x: cx + 6, y: y - tblRowH + 9, size: 10, font: fontR, color: C.ink })
+    }
+    cx += col.w
+  }
+  y -= tblRowH + 20
+
+  // ── Visit log table ───────────────────────────────────────────────────────────
+
+  page1.drawRectangle({ x: ML, y: y - 2, width: 6, height: 18, color: C.accent })
+  page1.drawText('ДНЕВНИК НА ТЕРЕНСКИ ПОСЕТИ', { x: ML + 12, y: y + 4, size: 11, font: fontB, color: C.ink })
+  y -= 30
+
+  const vtCols = [
+    { label: 'ДАТУМ', x: ML, w: 70 },
+    { label: 'ВРЕМЕНСКИ', x: ML + 70, w: 80 },
+    { label: 'СТАТУС', x: ML + 150, w: 90 },
+    { label: 'БЕЛЕШКИ', x: ML + 240, w: CW - 240 },
+  ]
+
+  let currentPage = page1
+  let pageCount = 1
+
+  const hdrH = 22
+  currentPage.drawRectangle({ x: ML, y: y - hdrH, width: CW, height: hdrH, color: C.headerBg })
+  for (const c of vtCols) {
+    currentPage.drawText(c.label, { x: c.x + 5, y: y - 14, size: 7, font: fontB, color: rgb(0.63, 0.69, 0.78) })
+  }
+  y -= hdrH
+
+  for (let i = 0; i < visits.length; i++) {
+    const v = visits[i]
+    const noteLines = wrapText(v.notes || '—', fontR, 8.5, vtCols[3].w - 8)
+    const rowH = Math.max(24, noteLines.length * 13 + 10)
+
+    if (y - rowH < FOOTER_H + 20) {
+      currentPage = addPage()
+      pageCount++
+      y = H - 55
+    }
+
+    if (i % 2 === 0) {
+      currentPage.drawRectangle({ x: ML, y: y - rowH, width: CW, height: rowH, color: C.bgLight })
+    }
+    currentPage.drawLine({ start: { x: ML, y: y - rowH }, end: { x: ML + CW, y: y - rowH }, thickness: 0.3, color: C.rule })
+
+    currentPage.drawText(v.date, { x: vtCols[0].x + 5, y: y - 14, size: 8.5, font: fontB, color: C.ink })
+
+    const weatherLines = wrapText(v.weather || '—', fontR, 8, vtCols[1].w - 8)
+    weatherLines.slice(0, 2).forEach((l, li) => {
+      currentPage.drawText(l, { x: vtCols[1].x + 5, y: y - 14 - li * 11, size: 8, font: fontR, color: C.mid })
+    })
+
+    const vs = (v as any).record_status ?? 'Normal'
+    currentPage.drawRectangle({ x: vtCols[2].x + 5, y: y - rowH + 6, width: 78, height: 14, color: statusBg(vs) })
+    currentPage.drawText(statusLabel(vs), { x: vtCols[2].x + 12, y: y - rowH + 11, size: 8, font: fontB, color: statusColor(vs) })
+
+    noteLines.forEach((l, li) => {
+      currentPage.drawText(l, { x: vtCols[3].x + 5, y: y - 14 - li * 11, size: 8.5, font: fontR, color: C.ink })
+    })
+
+    y -= rowH
+  }
+
+  y -= 20
+
+  // ── Technical narrative ───────────────────────────────────────────────────────
+
+  if (y < FOOTER_H + 60) {
+    currentPage = addPage()
+    pageCount++
+    y = H - 55
+  }
+
+  currentPage.drawRectangle({ x: ML, y: y - 2, width: 6, height: 18, color: C.accent })
+  currentPage.drawText('ТЕХНИЧКА НАРАЦИЈА', { x: ML + 12, y: y + 4, size: 11, font: fontB, color: C.ink })
+  y -= 28
+
+  const paraText = summary || 'Нема генерирана техничка нарација.'
+  const paragraphs = paraText.split(/\n+/).filter(Boolean)
+
+  for (const para of paragraphs) {
+    const isHeading = /^\d+\./.test(para)
+    const fnt = isHeading ? fontB : fontR
+    const sz = isHeading ? 10 : 9.5
+    const lines = wrapText(para, fnt, sz, CW)
+
+    if (y - lines.length * 14 < FOOTER_H + 20) {
+      currentPage = addPage()
+      pageCount++
+      y = H - 55
+    }
+
+    for (const line of lines) {
+      currentPage.drawText(line, { x: ML, y, size: sz, font: fnt, color: C.ink })
+      y -= 13
+    }
+    y -= isHeading ? 4 : 8
+  }
+
+  // ── Photo appendix ────────────────────────────────────────────────────────────
+
+  const allPhotos: (Photo & { visitDate: string; visitStatus: string; figIndex: number })[] = []
+  let figIdx = 1
+  for (const v of visits) {
+    for (const p of v.photos) {
+      allPhotos.push({ ...p, visitDate: v.date, visitStatus: (v as any).record_status ?? 'Normal', figIndex: figIdx++ })
+    }
+  }
+
+  if (allPhotos.length > 0) {
+    currentPage = addPage()
+    pageCount++
+    y = H - 55
+
+    currentPage.drawRectangle({ x: ML, y: y - 2, width: 6, height: 18, color: C.accent })
+    currentPage.drawText(`ФОТОГРАФСКА ДОКУМЕНТАЦИЈА  (${allPhotos.length} фотографии)`, { x: ML + 12, y: y + 4, size: 11, font: fontB, color: C.ink })
+    y -= 30
+
+    const COLS = 2
+    const GUTTER = 14
+    const CELL_W = (CW - GUTTER) / COLS
+    const IMG_H = 165
+    const CAP_H = 34
+    const CELL_H = IMG_H + CAP_H
+
+    let col = 0
+
+    for (const p of allPhotos) {
+      const cellX = ML + col * (CELL_W + GUTTER)
+
+      if (y - CELL_H < FOOTER_H + 10) {
+        currentPage = addPage()
+        pageCount++
+        y = H - 55
+        col = 0
+      }
+
+      // Image background
+      currentPage.drawRectangle({ x: cellX, y: y - IMG_H, width: CELL_W, height: IMG_H, color: rgb(0.92, 0.93, 0.95), borderColor: C.rule, borderWidth: 0.5 })
+
+      // Load & embed image
+      const imgData = await loadImageBytes(p.storage_url)
+      if (imgData) {
+        try {
+          const embedded = imgData.isPng
+            ? await pdfDoc.embedPng(imgData.bytes)
+            : await pdfDoc.embedJpg(imgData.bytes)
+          const dims = embedded.scaleToFit(CELL_W - 4, IMG_H - 4)
+          const drawX = cellX + (CELL_W - dims.width) / 2
+          const drawY = y - IMG_H + (IMG_H - dims.height) / 2 + 2
+          currentPage.drawImage(embedded, { x: drawX, y: drawY, width: dims.width, height: dims.height })
+        } catch { /* skip bad image */ }
+      }
+
+      // Status pill over image
+      currentPage.drawRectangle({ x: cellX + CELL_W - 75, y: y - 18, width: 70, height: 14, color: statusBg(p.visitStatus) })
+      currentPage.drawText(statusLabel(p.visitStatus), { x: cellX + CELL_W - 68, y: y - 13, size: 7.5, font: fontB, color: statusColor(p.visitStatus) })
+
+      // Caption area
+      const capY = y - IMG_H
+      currentPage.drawRectangle({ x: cellX, y: capY - CAP_H, width: CELL_W, height: CAP_H, color: rgb(0.98, 0.98, 0.99), borderColor: C.rule, borderWidth: 0.5 })
+
+      // Figure badge
+      currentPage.drawRectangle({ x: cellX + 5, y: capY - CAP_H + 6, width: 24, height: 20, color: C.headerBg })
+      const figStr = `Сл.${p.figIndex}`
+      currentPage.drawText(figStr, { x: cellX + 8, y: capY - CAP_H + 14, size: 7.5, font: fontB, color: C.accent })
+
+      // Caption text
+      const capText = p.caption || ''
+      const capLines = wrapText(capText, fontR, 8, CELL_W - 40)
+      currentPage.drawText(capLines[0] ?? '', { x: cellX + 34, y: capY - 10, size: 8, font: fontR, color: C.ink })
+      currentPage.drawText(p.visitDate, { x: cellX + 34, y: capY - 22, size: 7.5, font: fontR, color: C.muted })
+
+      col++
+      if (col >= COLS) {
+        col = 0
+        y -= CELL_H + 14
+      }
+    }
+  }
+
+  // ── Stamp footers on all pages ────────────────────────────────────────────────
+
+  const pages = pdfDoc.getPages()
+  pages.forEach((pg, i) => drawFooter(pg, i + 1, pages.length))
+
+  const bytes = await pdfDoc.save()
+  return new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' })
 }
