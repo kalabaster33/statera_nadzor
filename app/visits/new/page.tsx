@@ -21,21 +21,13 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { queueVisit } from '@/lib/offline-db'
 import { syncPendingVisits } from '@/lib/sync'
+import { getNextVisitNumber } from '@/lib/visit-number'
 import { useGeolocation } from '@/lib/useGeolocation'
 import { useDraft } from '@/lib/useDraft'
 import { PhotoCapture, type LocalPhoto } from '@/components/PhotoCapture'
 import { useProjects } from '@/lib/ProjectsContext'
 import type { Project } from '@/lib/types'
-
-const WEATHER_OPTIONS = [
-  { value: 'sunny', label: '☀️ Sunny' },
-  { value: 'cloudy', label: '☁️ Cloudy' },
-  { value: 'rainy', label: '🌧️ Rainy' },
-  { value: 'snowy', label: '❄️ Snow' },
-  { value: 'windy', label: '💨 Windy' },
-  { value: 'hot', label: '🔥 Hot' },
-  { value: 'cold', label: '🥶 Cold' },
-]
+import { WEATHER_OPTIONS } from '@/lib/weather'
 
 export default function NewVisitPage() {
   const router = useRouter()
@@ -45,6 +37,9 @@ export default function NewVisitPage() {
   // ── Form state ──────────────────────────────────────────────────────────────
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [projectId, setProjectId] = useState('')
+  const [visitNumber, setVisitNumber] = useState<number | ''>('')
+  // Guard: when a draft restore supplies the number, skip the next auto-fetch
+  const numberFromDraft = useRef(false)
   const [weather, setWeather] = useState<string[]>([])
   const [recordStatus, setRecordStatus] = useState<'Normal' | 'Critical'>('Normal')
   const [notes, setNotes] = useState('')
@@ -77,18 +72,22 @@ export default function NewVisitPage() {
   // (we need project list to validate project_id)
   const [pendingDraftState, setPendingDraftState] = useState<null | {
     project_id: string; date: string; weather: string[]
-    record_status: 'Normal' | 'Critical'; notes: string
+    record_status: 'Normal' | 'Critical'; visit_number: number | null; notes: string
   }>(null)
 
   useEffect(() => {
     if (!draftRestored || !pendingDraftState) return
     if (loadingProjects) return // wait for projects
 
-    const { project_id, date: d, weather: w, record_status, notes: n } = pendingDraftState
-    if (projects.find((p) => p.id === project_id)) setProjectId(project_id)
+    const { project_id, date: d, weather: w, record_status, visit_number, notes: n } = pendingDraftState
+    if (projects.find((p) => p.id === project_id)) {
+      if (visit_number != null) numberFromDraft.current = true
+      setProjectId(project_id)
+    }
     setDate(d)
     setWeather(w)
     setRecordStatus(record_status)
+    if (visit_number != null) setVisitNumber(visit_number)
     setNotes(n)
     setPendingDraftState(null)
   }, [draftRestored, pendingDraftState, projects, loadingProjects])
@@ -104,21 +103,34 @@ export default function NewVisitPage() {
           date: draft.date,
           weather: draft.weather,
           record_status: draft.record_status,
+          visit_number: draft.visit_number ?? null,
           notes: draft.notes,
         })
       })
     })
   }, [draftRestored])
 
+  // Auto-fetch the next visit number whenever the project changes
+  // (skipped once when a restored draft already supplied the number)
+  useEffect(() => {
+    if (!projectId) { setVisitNumber(''); return }
+    if (numberFromDraft.current) { numberFromDraft.current = false; return }
+    let cancelled = false
+    getNextVisitNumber(projectId)
+      .then((n) => { if (!cancelled) setVisitNumber(n ?? '') })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [projectId])
+
   // Auto-save text fields (debounced — waits for pause in typing)
   useEffect(() => {
     if (restoring) return
     scheduleTextSave(
-      { project_id: projectId, date, weather, record_status: recordStatus, notes, geolocation: geo },
+      { project_id: projectId, date, weather, record_status: recordStatus, visit_number: visitNumber === '' ? null : visitNumber, notes, geolocation: geo },
       photos
     )
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, date, weather, recordStatus, notes])
+  }, [projectId, date, weather, recordStatus, visitNumber, notes])
 
   // Auto-save photos immediately on change — crash-safe
   const photosRef = useRef(photos)
@@ -128,7 +140,7 @@ export default function NewVisitPage() {
     if (photos === photosRef.current) return
     photosRef.current = photos
     savePhotosNow(
-      { project_id: projectId, date, weather, record_status: recordStatus, notes, geolocation: geo },
+      { project_id: projectId, date, weather, record_status: recordStatus, visit_number: visitNumber === '' ? null : visitNumber, notes, geolocation: geo },
       photos
     )
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,6 +167,7 @@ export default function NewVisitPage() {
           date,
           weather: weather.join(', ') || null,
           record_status: recordStatus,
+          visit_number: visitNumber === '' ? null : visitNumber,
           geolocation: geo,
           notes: notes.trim() || null,
           photos: photos.map((p) => ({ blob: p.blob, caption: p.caption || undefined })),
@@ -254,15 +267,34 @@ export default function NewVisitPage() {
             )}
           </div>
 
-          <div>
-            <label className="label">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="input-field"
-              required
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Date</label>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="input-field"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Visit No.</label>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                value={visitNumber}
+                onChange={(e) => setVisitNumber(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
+                placeholder="auto"
+                className="input-field"
+              />
+              <p className="text-[10px] text-text-muted mt-1">
+                {visitNumber === ''
+                  ? 'Will be assigned automatically on sync'
+                  : 'Auto-suggested — adjust if needed'}
+              </p>
+            </div>
           </div>
         </div>
 

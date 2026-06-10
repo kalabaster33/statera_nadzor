@@ -14,6 +14,9 @@ const items = [
 export function BottomNav() {
   const pathname = usePathname()
 
+  // No app chrome on the login screen
+  if (pathname.startsWith('/login')) return null
+
   return (
     <nav className="fixed bottom-0 inset-x-0 z-30 border-t border-border bg-bg-secondary/95 backdrop-blur pb-safe-bottom">
       <div className="mx-auto flex max-w-2xl items-center justify-around px-2 py-2">

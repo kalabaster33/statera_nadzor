@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { createClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 
@@ -85,6 +86,13 @@ ${visitBlocks}
 // ─── Route handler ────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
+    // Auth gate — this endpoint spends paid AI tokens
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const { notes, projectName, monthLabel } = await req.json()
 
     if (!notes || !Array.isArray(notes) || notes.length === 0) {

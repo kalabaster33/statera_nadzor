@@ -1,7 +1,7 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { Camera, ImagePlus, MapPin, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Camera, Check, ImagePlus, MapPin, Pencil, X } from 'lucide-react'
 import { compressPhoto } from '@/lib/sync'
 import { applyWatermark } from '@/lib/watermark'
 import type { Geolocation } from '@/lib/types'
@@ -38,6 +38,17 @@ export function PhotoCapture({ photos, onChange, geo, projectName }: Props) {
   const galleryRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy]         = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
+  /** Photo currently open in the fullscreen viewer/caption editor */
+  const [viewerId, setViewerId] = useState<string | null>(null)
+  const viewerPhoto = photos.find((p) => p.id === viewerId) ?? null
+
+  // Lock body scroll while the viewer is open
+  useEffect(() => {
+    if (!viewerId) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [viewerId])
 
   async function processFile(file: File): Promise<LocalPhoto> {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -155,11 +166,18 @@ export function PhotoCapture({ photos, onChange, geo, projectName }: Props) {
               key={p.id}
               className="relative rounded-xl overflow-hidden bg-bg-secondary border border-border"
             >
-              <img
-                src={p.previewUrl}
-                alt=""
-                className="w-full aspect-square object-cover"
-              />
+              <button
+                type="button"
+                onClick={() => setViewerId(p.id)}
+                className="block w-full"
+                aria-label="View photo and edit caption"
+              >
+                <img
+                  src={p.previewUrl}
+                  alt=""
+                  className="w-full aspect-square object-cover"
+                />
+              </button>
 
               {/* Watermark badge */}
               <span
@@ -183,14 +201,17 @@ export function PhotoCapture({ photos, onChange, geo, projectName }: Props) {
                 <X className="size-4" />
               </button>
 
-              {/* Caption */}
-              <input
-                type="text"
-                placeholder="Caption (optional)"
-                value={p.caption}
-                onChange={(e) => updateCaption(p.id, e.target.value)}
-                className="w-full bg-bg-primary/80 backdrop-blur text-xs text-text-primary px-2 py-1.5 border-t border-border focus:outline-none focus:bg-bg-primary"
-              />
+              {/* Caption preview — tap to edit fullscreen */}
+              <button
+                type="button"
+                onClick={() => setViewerId(p.id)}
+                className="w-full flex items-center gap-1.5 bg-bg-primary/80 backdrop-blur text-xs px-2 py-2 border-t border-border text-left"
+              >
+                <Pencil className="size-3 shrink-0 text-text-muted" />
+                <span className={`truncate ${p.caption ? 'text-text-primary' : 'text-text-muted'}`}>
+                  {p.caption || 'Add caption…'}
+                </span>
+              </button>
             </div>
           ))}
         </div>
@@ -201,6 +222,58 @@ export function PhotoCapture({ photos, onChange, geo, projectName }: Props) {
           {photos.length} photo{photos.length === 1 ? '' : 's'} ·{' '}
           {photos.filter((p) => p.watermarked).length} watermarked · compressed
         </p>
+      )}
+
+      {/* Fullscreen viewer + large caption editor */}
+      {viewerPhoto && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-bg-primary">
+          {/* Top bar */}
+          <div className="flex items-center justify-between px-4 py-3 shrink-0">
+            <span className="text-sm font-medium text-text-secondary">
+              Photo {photos.findIndex((p) => p.id === viewerPhoto.id) + 1} / {photos.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { removePhoto(viewerPhoto.id); setViewerId(null) }}
+                className="size-10 rounded-xl bg-danger/10 text-danger border border-danger/20 grid place-items-center active:scale-95"
+                aria-label="Delete photo"
+              >
+                <X className="size-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewerId(null)}
+                className="btn-primary px-4 py-2"
+              >
+                <Check className="size-4" /> Done
+              </button>
+            </div>
+          </div>
+
+          {/* Image */}
+          <div className="flex-1 min-h-0 grid place-items-center px-2">
+            <img
+              src={viewerPhoto.previewUrl}
+              alt=""
+              className="max-h-full max-w-full object-contain rounded-lg"
+            />
+          </div>
+
+          {/* Large caption field */}
+          <div className="shrink-0 p-4 pb-6 space-y-2 bg-bg-secondary border-t border-border">
+            <label className="label">Caption — appears under the photo in the PDF report</label>
+            <textarea
+              value={viewerPhoto.caption}
+              onChange={(e) => updateCaption(viewerPhoto.id, e.target.value)}
+              placeholder="e.g. Column C3 — insufficient concrete cover, 12mm observed"
+              rows={3}
+              autoFocus
+              className="input-field resize-none text-base leading-relaxed"
+              enterKeyHint="done"
+            />
+          </div>
+        </div>
       )}
     </div>
   )

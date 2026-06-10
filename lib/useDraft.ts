@@ -19,6 +19,7 @@ export type DraftState = {
   date: string
   weather: string[]
   record_status: 'Normal' | 'Critical'
+  visit_number: number | null
   notes: string
   geolocation: Geolocation | null
 }
@@ -93,6 +94,7 @@ export function useDraft(): UseDraftReturn {
         date:          state.date,
         weather:       state.weather,
         record_status: state.record_status,
+        visit_number:  state.visit_number,
         notes:         state.notes,
         geolocation:   state.geolocation,
         photos:        photos.map((p) => ({

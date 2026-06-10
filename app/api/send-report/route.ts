@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { Resend } from 'resend'
+import { createClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 
@@ -137,6 +138,13 @@ function buildEmailHtml(params: {
 
 export async function POST(req: Request) {
   try {
+    // Auth gate — this endpoint sends email on the firm's behalf
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const apiKey = process.env.RESEND_API_KEY
     if (!apiKey) {
       return NextResponse.json(

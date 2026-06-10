@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Calendar, CheckCircle2, Download, Loader2, Mail, Sparkles } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useProjects } from '@/lib/ProjectsContext'
+import { getSignedPhotoUrls } from '@/lib/photo-url'
 import type { Project, Visit, Photo } from '@/lib/types'
 
 type FullVisit = Visit & { photos: Photo[] }
@@ -33,6 +34,8 @@ export default function ReportsPage() {
   const [visits, setVisits]         = useState<FullVisit[]>([])
   const [loading, setLoading]       = useState(false)
   const [summary, setSummary]       = useState('')
+  /** When the shown narrative was generated (ISO) — null means freshly generated this session */
+  const [summarySavedAt, setSummarySavedAt] = useState<string | null>(null)
   const [summarizing, setSummarizing] = useState(false)
   const [exporting, setExporting]   = useState(false)
   const [sending, setSending]       = useState(false)
@@ -51,6 +54,7 @@ export default function ReportsPage() {
     if (!projectId || !month) return
     setLoading(true)
     setSummary('')
+    setSummarySavedAt(null)
     const supabase = createClient()
     const [y, m] = month.split('-').map(Number)
     const start = `${month}-01`
@@ -67,6 +71,20 @@ export default function ReportsPage() {
       .then(({ data }) => {
         if (data) setVisits(data as FullVisit[])
         setLoading(false)
+      })
+
+    // Load a previously generated narrative for this project+month (if any)
+    supabase
+      .from('monthly_reports')
+      .select('summary, generated_at')
+      .eq('project_id', projectId)
+      .eq('month', month)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.summary) {
+          setSummary(data.summary)
+          setSummarySavedAt(data.generated_at)
+        }
       })
   }, [projectId, month])
 
@@ -89,6 +107,18 @@ export default function ReportsPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
       setSummary(data.summary)
+
+      // Persist so the narrative survives sessions and isn't regenerated (and paid for) each time
+      const now = new Date().toISOString()
+      setSummarySavedAt(now)
+      const supabase = createClient()
+      const { error: saveErr } = await supabase
+        .from('monthly_reports')
+        .upsert(
+          { project_id: projectId, month, summary: data.summary, generated_at: now, updated_at: now },
+          { onConflict: 'project_id,month' }
+        )
+      if (saveErr) console.warn('[reports] failed to persist narrative', saveErr)
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -101,10 +131,17 @@ export default function ReportsPage() {
     if (!project) throw new Error('No project selected')
     // Lazy load the heavy pdf generator ONLY when exporting
     const { generateReportPDF } = await import('@/lib/pdf')
-    
+
+    // Bucket is private — resolve signed URLs so the PDF generator can fetch images
+    const signed = await getSignedPhotoUrls(visits.flatMap((v) => v.photos))
+    const visitsWithSignedPhotos = visits.map((v) => ({
+      ...v,
+      photos: v.photos.map((p) => ({ ...p, storage_url: signed.get(p.id) ?? p.storage_url })),
+    }))
+
     return generateReportPDF({
       project,
-      visits,
+      visits: visitsWithSignedPhotos,
       monthLabel: monthLabel(month),
       summary: summary || 'Нема генерирана техничка нарација.',
     })
@@ -224,8 +261,15 @@ export default function ReportsPage() {
             </button>
 
             {summary && (
-              <div className="rounded-xl bg-bg-secondary border border-border p-4 max-h-64 overflow-y-auto">
-                <p className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed">{summary}</p>
+              <div className="space-y-1.5">
+                <div className="rounded-xl bg-bg-secondary border border-border p-4 max-h-64 overflow-y-auto">
+                  <p className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed">{summary}</p>
+                </div>
+                {summarySavedAt && (
+                  <p className="text-[10px] text-text-muted text-right">
+                    Narrative saved · generated {new Date(summarySavedAt).toLocaleString()} — regenerate if visits changed since
+                  </p>
+                )}
               </div>
             )}
 
@@ -304,7 +348,15 @@ export default function ReportsPage() {
             {visits.map((v) => (
               <div key={v.id} className="card">
                 <div className="flex items-center justify-between text-xs text-text-muted">
-                  <span>{new Date(v.date).toLocaleDateString('en-US')}</span>
+                  <span className="flex items-center gap-2">
+                    {v.visit_number != null && (
+                      <span className="font-mono text-accent font-semibold">№{v.visit_number}</span>
+                    )}
+                    {new Date(v.date).toLocaleDateString('en-US')}
+                    {v.record_status === 'Critical' && (
+                      <span className="rounded-full bg-danger/15 text-danger px-2 py-0.5 text-[10px] font-semibold">CRITICAL</span>
+                    )}
+                  </span>
                   <span>{v.photos.length} photos</span>
                 </div>
                 {v.notes && <p className="text-sm mt-2 line-clamp-3">{v.notes}</p>}

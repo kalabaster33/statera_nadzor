@@ -37,6 +37,8 @@ export type Visit = {
   status: 'draft' | 'final'
   /** Observation severity, new field — requires schema migration */
   record_status: 'Normal' | 'Critical'
+  /** Sequential visit number within the project (supervision diary reference) */
+  visit_number: number | null
   /** GPS captured at visit time */
   latitude: number | null
   longitude: number | null
@@ -125,6 +127,8 @@ export type VisitLog = {
   weather: string | null
   /** Normal = routine observations. Critical = safety/structural issue found. */
   record_status: 'Normal' | 'Critical'
+  /** Sequential visit number within the project (supervision diary reference) */
+  visit_number: number | null
   /** Lifecycle: draft until engineer finalises for the month. */
   status: 'draft' | 'final'
   /** Captured from device GPS at time of visit. Null if denied/unavailable. */
@@ -134,6 +138,20 @@ export type VisitLog = {
   photos: VisitLogPhoto[]
   project: Project
   created_at: string
+  updated_at: string
+}
+
+/**
+ * DB row for the `monthly_reports` table.
+ * One AI-generated technical narrative per project + month ('YYYY-MM').
+ */
+export type MonthlyReport = {
+  id: string
+  user_id: string | null
+  project_id: string
+  month: string
+  summary: string
+  generated_at: string
   updated_at: string
 }
 
@@ -152,6 +170,7 @@ export type VisitDraft = {
   date: string
   weather: string[]
   record_status: 'Normal' | 'Critical'
+  visit_number: number | null
   notes: string
   geolocation: Geolocation | null
   /** We can't store Blobs in localStorage; store preview data-URLs and re-use captions */

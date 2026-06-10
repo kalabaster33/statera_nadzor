@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Plus, FolderOpen, FileText, Calendar, Loader2 } from 'lucide-react'
+import { Plus, FolderOpen, FileText, Calendar, CloudOff, Loader2, LogOut, ShieldAlert } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { getPendingVisits, type QueuedVisit } from '@/lib/offline-db'
 import { useProjects } from '@/lib/ProjectsContext'
 import type { Visit, Project } from '@/lib/types'
 
@@ -12,8 +13,28 @@ type RecentVisit = Visit & { project: Pick<Project, 'name'> | null }
 export default function HomePage() {
   const { projects } = useProjects()
   const [visits, setVisits] = useState<RecentVisit[]>([])
+  const [pendingQueue, setPendingQueue] = useState<QueuedVisit[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [loadingVisits, setLoadingVisits] = useState(true)
+
+  // Load locally queued (not-yet-synced) visits so field work is never "invisible"
+  const refreshQueue = useCallback(() => {
+    getPendingVisits().then(setPendingQueue).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    refreshQueue()
+    // Re-check when connectivity returns (sync engine will drain the queue)
+    // and when the app regains focus after backgrounding on site
+    window.addEventListener('online', refreshQueue)
+    window.addEventListener('focus', refreshQueue)
+    const interval = setInterval(refreshQueue, 30_000)
+    return () => {
+      window.removeEventListener('online', refreshQueue)
+      window.removeEventListener('focus', refreshQueue)
+      clearInterval(interval)
+    }
+  }, [refreshQueue])
 
   // Fetch visits when selected project changes
   useEffect(() => {
@@ -38,12 +59,29 @@ export default function HomePage() {
 
   return (
     <div className="py-5 space-y-5">
-      <header>
-        <p className="text-xs font-mono uppercase tracking-wider text-accent">Nadzor</p>
-        <h1 className="text-2xl font-bold mt-1">Site Supervision</h1>
-        <p className="text-sm text-text-secondary mt-1">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <p className="text-xs font-mono uppercase tracking-wider text-accent">Nadzor</p>
+          <h1 className="text-2xl font-bold mt-1">Site Supervision</h1>
+          <p className="text-sm text-text-secondary mt-1">
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={async () => {
+            const pending = await getPendingVisits().catch(() => [])
+            if (pending.length > 0 && !window.confirm(
+              `${pending.length} visit(s) are still waiting to sync and cannot upload while signed out. Sign out anyway?`
+            )) return
+            await createClient().auth.signOut()
+            window.location.assign('/login')
+          }}
+          className="size-10 rounded-xl bg-bg-tertiary border border-border grid place-items-center text-text-muted active:scale-95"
+          aria-label="Sign out"
+        >
+          <LogOut className="size-4" />
+        </button>
       </header>
 
       {/* Quick action */}
@@ -100,15 +138,64 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Pending sync (saved offline, not yet uploaded) */}
+      {(() => {
+        const pendingForFilter = selectedProjectId
+          ? pendingQueue.filter((q) => q.project_id === selectedProjectId)
+          : pendingQueue
+        if (pendingForFilter.length === 0) return null
+        return (
+          <section>
+            <h2 className="text-sm font-semibold text-warning uppercase tracking-wider mb-3 flex items-center gap-2">
+              <CloudOff className="size-4" /> Pending Sync ({pendingForFilter.length})
+            </h2>
+            <div className="space-y-2">
+              {pendingForFilter.map((q) => (
+                <div key={q.localId} className="card flex items-start gap-3 border-warning/30">
+                  <div className="size-10 rounded-lg bg-warning/15 text-warning grid place-items-center shrink-0">
+                    <CloudOff className="size-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium truncate">
+                        {projects.find((p) => p.id === q.project_id)?.name ?? 'Unknown project'}
+                      </p>
+                      {q.record_status === 'Critical' && (
+                        <span className="flex items-center gap-1 rounded-full bg-danger/15 text-danger px-2 py-0.5 text-[10px] font-semibold shrink-0">
+                          <ShieldAlert className="size-3" /> CRITICAL
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
+                      {q.visit_number != null && <span className="font-mono text-accent">№{q.visit_number}</span>}
+                      <span>{new Date(q.date).toLocaleDateString('en-US')}</span>
+                      <span>· {q.photos.length} photo{q.photos.length === 1 ? '' : 's'}</span>
+                      <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        q.syncStatus === 'error' ? 'bg-danger/15 text-danger' : 'bg-warning/15 text-warning'
+                      }`}>
+                        {q.syncStatus === 'error' ? 'SYNC ERROR' : 'WAITING FOR CONNECTION'}
+                      </span>
+                    </div>
+                    {q.notes && (
+                      <p className="text-sm text-text-secondary mt-1.5 line-clamp-2">{q.notes}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )
+      })()}
+
       {/* Recent visits */}
       <section>
         <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
-          {selectedProjectId 
+          {selectedProjectId
             ? `Recent Visits: ${projects.find(p => p.id === selectedProjectId)?.name || ''}`
             : 'All Recent Visits'
           }
         </h2>
-        
+
         {loadingVisits ? (
           <div className="card grid place-items-center py-8">
             <Loader2 className="size-6 animate-spin text-accent" />
@@ -126,12 +213,22 @@ export default function HomePage() {
                 href={`/visits/${v.id}`}
                 className="card flex items-start gap-3 active:scale-[0.99] transition-transform"
               >
-                <div className="size-10 rounded-lg bg-accent/15 text-accent grid place-items-center shrink-0">
-                  <Calendar className="size-5" />
+                <div className={`size-10 rounded-lg grid place-items-center shrink-0 ${
+                  v.record_status === 'Critical' ? 'bg-danger/15 text-danger' : 'bg-accent/15 text-accent'
+                }`}>
+                  {v.record_status === 'Critical' ? <ShieldAlert className="size-5" /> : <Calendar className="size-5" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{v.project?.name ?? 'Unknown project'}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium truncate">{v.project?.name ?? 'Unknown project'}</p>
+                    {v.record_status === 'Critical' && (
+                      <span className="rounded-full bg-danger/15 text-danger px-2 py-0.5 text-[10px] font-semibold shrink-0">
+                        CRITICAL
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
+                    {v.visit_number != null && <span className="font-mono text-accent">№{v.visit_number}</span>}
                     <span>{new Date(v.date).toLocaleDateString('en-US')}</span>
                     {v.weather && <span>· {v.weather}</span>}
                   </div>

@@ -12,6 +12,8 @@ export interface QueuedVisit {
   date: string
   weather: string | null
   record_status: 'Normal' | 'Critical'
+  /** Sequential visit number within the project. Null = assign on sync. */
+  visit_number: number | null
   geolocation: Geolocation | null
   notes: string | null
   /** Compressed blob for upload + optional hi-res blob */
@@ -38,6 +40,8 @@ export interface StoredDraft {
   date: string
   weather: string[]
   record_status: 'Normal' | 'Critical'
+  /** Sequential visit number within the project (may be null while offline) */
+  visit_number: number | null
   notes: string
   geolocation: Geolocation | null
   /** Full blobs — so photos survive without needing re-capture */

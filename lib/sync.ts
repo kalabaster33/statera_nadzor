@@ -26,6 +26,11 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
 
   const supabase = createClient()
 
+  // Never sync without a session — RLS would reject the inserts and the
+  // queue would churn into error state. Visits stay queued until sign-in.
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { synced: 0, failed: 0 }
+
   const pending = await getPendingVisits()
   let synced = 0
   let failed = 0
@@ -34,7 +39,21 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
     if (!q.id) continue
     await markSyncing(q.id)
     try {
-      // 1. Insert visit — now includes geolocation + record_status
+      // 0. Assign visit_number if it couldn't be determined offline:
+      //    server max for the project + 1 (fallback 1 for first visit)
+      let visitNumber: number | null = q.visit_number ?? null
+      if (visitNumber == null) {
+        const { data: maxRows } = await supabase
+          .from('visits')
+          .select('visit_number')
+          .eq('project_id', q.project_id)
+          .not('visit_number', 'is', null)
+          .order('visit_number', { ascending: false })
+          .limit(1)
+        visitNumber = (maxRows?.[0]?.visit_number ?? 0) + 1
+      }
+
+      // 1. Insert visit — now includes geolocation + record_status + visit_number
       const { data: visit, error: visitErr } = await supabase
         .from('visits')
         .insert({
@@ -43,6 +62,7 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
           weather: q.weather,
           notes: q.notes,
           record_status: q.record_status ?? 'Normal',
+          visit_number: visitNumber,
           latitude: q.geolocation?.latitude ?? null,
           longitude: q.geolocation?.longitude ?? null,
           location_accuracy: q.geolocation?.accuracy ?? null,
@@ -57,7 +77,7 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
       for (let i = 0; i < q.photos.length; i++) {
         const { blob, hiResBlob, caption } = q.photos[i]
         const ts = `${Date.now()}-${i}`
-        const basePath = `anonymous/${visit.id}/${ts}`
+        const basePath = `${user.id}/${visit.id}/${ts}`
 
         // Compressed upload (always)
         const compressedPath = `${basePath}.jpg`
@@ -65,6 +85,9 @@ export async function syncPendingVisits(): Promise<{ synced: number; failed: num
           .from('site-photos')
           .upload(compressedPath, blob, { contentType: 'image/jpeg', upsert: false })
         if (upErr) throw upErr
+        // Bucket is private: this URL is stored as a stable identifier only.
+        // All display/PDF consumers resolve a signed URL from storage_path
+        // via lib/photo-url.ts.
         const { data: pub } = supabase.storage.from('site-photos').getPublicUrl(compressedPath)
 
         // Hi-res upload (if available)

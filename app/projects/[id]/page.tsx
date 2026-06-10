@@ -6,7 +6,8 @@ import Link from 'next/link'
 import { ArrowLeft, Calendar, Loader2, MapPin, FileText, Upload, Download, File, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useProjects } from '@/lib/ProjectsContext'
-import type { Visit, Project, ProjectDocument } from '@/lib/types'
+import { collectStoragePaths } from '@/lib/photo-url'
+import type { Visit, Project, ProjectDocument, Photo } from '@/lib/types'
 
 type ProjectWithRelations = Project & { 
   visits: Visit[];
@@ -51,9 +52,11 @@ export default function ProjectDetailsPage() {
     setUploadingDoc(true)
     try {
       const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Session expired — please sign in again')
       const ts = Date.now()
       const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
-      const storagePath = `anonymous/${project.id}/${ts}_${safeName}`
+      const storagePath = `${user.id}/${project.id}/${ts}_${safeName}`
 
       // Upload file to storage
       const { error: uploadError } = await supabase.storage
@@ -90,6 +93,20 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  /** Open a document via a short-lived signed URL (bucket is private). */
+  async function openDocument(doc: ProjectDocument) {
+    const supabase = createClient()
+    const path =
+      doc.storage_path ||
+      decodeURIComponent(doc.storage_url.match(/\/object\/(?:public|sign)\/project-documents\/([^?]+)/)?.[1] ?? '')
+    if (!path) {
+      window.open(doc.storage_url, '_blank', 'noopener')
+      return
+    }
+    const { data } = await supabase.storage.from('project-documents').createSignedUrl(path, 3600)
+    window.open(data?.signedUrl ?? doc.storage_url, '_blank', 'noopener')
+  }
+
   function formatBytes(bytes: number) {
     if (bytes === 0) return '0 B'
     const k = 1024
@@ -104,12 +121,38 @@ export default function ProjectDetailsPage() {
     
     setDeleting(true)
     const supabase = createClient()
+
+    // Collect storage paths BEFORE the cascade delete removes the rows.
+    // Best-effort: failures here leave orphaned files, never broken references.
+    let photoPaths: string[] = []
+    const docPaths = (project.project_documents ?? [])
+      .map((d) => d.storage_path)
+      .filter(Boolean)
+    try {
+      const visitIds = (project.visits ?? []).map((v) => v.id)
+      if (visitIds.length > 0) {
+        const { data: photoRows } = await supabase
+          .from('photos')
+          .select('id, storage_url, storage_path, hi_res_url, hi_res_path')
+          .in('visit_id', visitIds)
+        if (photoRows) photoPaths = collectStoragePaths(photoRows as Photo[])
+      }
+    } catch { /* proceed with delete regardless */ }
+
     const { error } = await supabase.from('projects').delete().eq('id', project.id)
-    
+
     if (error) {
       alert('Failed to delete project')
       setDeleting(false)
     } else {
+      if (photoPaths.length > 0) {
+        const { error: e1 } = await supabase.storage.from('site-photos').remove(photoPaths)
+        if (e1) console.warn('[delete project] photo storage cleanup failed', e1)
+      }
+      if (docPaths.length > 0) {
+        const { error: e2 } = await supabase.storage.from('project-documents').remove(docPaths)
+        if (e2) console.warn('[delete project] document storage cleanup failed', e2)
+      }
       invalidate() // Refresh the global project cache
       router.push('/projects')
     }
@@ -199,12 +242,11 @@ export default function ProjectDetailsPage() {
         ) : (
           <div className="space-y-2">
             {project.project_documents.map((doc) => (
-              <a
+              <button
                 key={doc.id}
-                href={doc.storage_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="card flex items-center gap-3 active:scale-[0.99] transition-transform p-3"
+                type="button"
+                onClick={() => openDocument(doc)}
+                className="card w-full text-left flex items-center gap-3 active:scale-[0.99] transition-transform p-3"
               >
                 <div className="size-10 rounded-lg bg-bg-tertiary text-text-secondary grid place-items-center shrink-0">
                   <File className="size-5" />
@@ -214,7 +256,7 @@ export default function ProjectDetailsPage() {
                   {doc.size_bytes && <p className="text-xs text-text-muted">{formatBytes(doc.size_bytes)}</p>}
                 </div>
                 <Download className="size-4 text-text-muted shrink-0" />
-              </a>
+              </button>
             ))}
           </div>
         )}
@@ -248,7 +290,10 @@ export default function ProjectDetailsPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2 mt-1">
-                    <span className="text-sm font-medium">{new Date(v.date).toLocaleDateString('en-US')}</span>
+                    <span className="text-sm font-medium">
+                      {v.visit_number != null && <span className="font-mono text-accent mr-1.5">№{v.visit_number}</span>}
+                      {new Date(v.date).toLocaleDateString('en-US')}
+                    </span>
                     <span className={`text-[10px] px-2 py-0.5 rounded-full ${v.record_status === 'Critical' ? 'bg-danger/20 text-danger' : 'bg-success/20 text-success'}`}>
                       {v.record_status === 'Critical' ? 'Critical' : 'Normal'}
                     </span>

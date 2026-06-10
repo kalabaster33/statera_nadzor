@@ -126,6 +126,12 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
     return status === 'Critical' ? 'КРИТИЧНО' : 'УРЕДНО'
   }
 
+  /** ISO yyyy-mm-dd → dd.mm.yyyy (Macedonian convention) */
+  function formatDate(iso: string): string {
+    const [yy, mm, dd] = iso.split('-')
+    return dd && mm && yy ? `${dd}.${mm}.${yy}` : iso
+  }
+
   function statusColor(status: string) {
     return status === 'Critical' ? C.red : C.green
   }
@@ -233,10 +239,11 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
   y -= 30
 
   const vtCols = [
-    { label: 'ДАТУМ', x: ML, w: 70 },
-    { label: 'ВРЕМЕНСКИ', x: ML + 70, w: 80 },
-    { label: 'СТАТУС', x: ML + 150, w: 90 },
-    { label: 'БЕЛЕШКИ', x: ML + 240, w: CW - 240 },
+    { label: 'БР.', x: ML, w: 32 },
+    { label: 'ДАТУМ', x: ML + 32, w: 68 },
+    { label: 'ВРЕМЕНСКИ', x: ML + 100, w: 78 },
+    { label: 'СТАТУС', x: ML + 178, w: 86 },
+    { label: 'БЕЛЕШКИ', x: ML + 264, w: CW - 264 },
   ]
 
   let currentPage = page1
@@ -251,7 +258,7 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
 
   for (let i = 0; i < visits.length; i++) {
     const v = visits[i]
-    const noteLines = wrapText(v.notes || '—', fontR, 8.5, vtCols[3].w - 8)
+    const noteLines = wrapText(v.notes || '—', fontR, 8.5, vtCols[4].w - 8)
     const rowH = Math.max(24, noteLines.length * 13 + 10)
 
     if (y - rowH < FOOTER_H + 20) {
@@ -265,19 +272,22 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
     }
     currentPage.drawLine({ start: { x: ML, y: y - rowH }, end: { x: ML + CW, y: y - rowH }, thickness: 0.3, color: C.rule })
 
-    currentPage.drawText(v.date, { x: vtCols[0].x + 5, y: y - 14, size: 8.5, font: fontB, color: C.ink })
+    const visitNo = (v as any).visit_number != null ? String((v as any).visit_number) : '—'
+    currentPage.drawText(visitNo, { x: vtCols[0].x + 5, y: y - 14, size: 8.5, font: fontB, color: C.accent })
 
-    const weatherLines = wrapText(v.weather || '—', fontR, 8, vtCols[1].w - 8)
+    currentPage.drawText(formatDate(v.date), { x: vtCols[1].x + 5, y: y - 14, size: 8.5, font: fontB, color: C.ink })
+
+    const weatherLines = wrapText(v.weather || '—', fontR, 8, vtCols[2].w - 8)
     weatherLines.slice(0, 2).forEach((l, li) => {
-      currentPage.drawText(l, { x: vtCols[1].x + 5, y: y - 14 - li * 11, size: 8, font: fontR, color: C.mid })
+      currentPage.drawText(l, { x: vtCols[2].x + 5, y: y - 14 - li * 11, size: 8, font: fontR, color: C.mid })
     })
 
     const vs = (v as any).record_status ?? 'Normal'
-    currentPage.drawRectangle({ x: vtCols[2].x + 5, y: y - rowH + 6, width: 78, height: 14, color: statusBg(vs) })
-    currentPage.drawText(statusLabel(vs), { x: vtCols[2].x + 12, y: y - rowH + 11, size: 8, font: fontB, color: statusColor(vs) })
+    currentPage.drawRectangle({ x: vtCols[3].x + 5, y: y - rowH + 6, width: 76, height: 14, color: statusBg(vs) })
+    currentPage.drawText(statusLabel(vs), { x: vtCols[3].x + 12, y: y - rowH + 11, size: 8, font: fontB, color: statusColor(vs) })
 
     noteLines.forEach((l, li) => {
-      currentPage.drawText(l, { x: vtCols[3].x + 5, y: y - 14 - li * 11, size: 8.5, font: fontR, color: C.ink })
+      currentPage.drawText(l, { x: vtCols[4].x + 5, y: y - 14 - li * 11, size: 8.5, font: fontR, color: C.ink })
     })
 
     y -= rowH
@@ -321,11 +331,17 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
 
   // ── Photo appendix ────────────────────────────────────────────────────────────
 
-  const allPhotos: (Photo & { visitDate: string; visitStatus: string; figIndex: number })[] = []
+  const allPhotos: (Photo & { visitDate: string; visitStatus: string; visitNumber: number | null; figIndex: number })[] = []
   let figIdx = 1
   for (const v of visits) {
     for (const p of v.photos) {
-      allPhotos.push({ ...p, visitDate: v.date, visitStatus: (v as any).record_status ?? 'Normal', figIndex: figIdx++ })
+      allPhotos.push({
+        ...p,
+        visitDate: v.date,
+        visitStatus: (v as any).record_status ?? 'Normal',
+        visitNumber: (v as any).visit_number ?? null,
+        figIndex: figIdx++,
+      })
     }
   }
 
@@ -342,7 +358,7 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
     const GUTTER = 14
     const CELL_W = (CW - GUTTER) / COLS
     const IMG_H = 165
-    const CAP_H = 34
+    const CAP_H = 46   // room for 2 caption lines + metadata line
     const CELL_H = IMG_H + CAP_H
 
     let col = 0
@@ -387,11 +403,18 @@ export async function generateReportPDF(input: ReportInput): Promise<Blob> {
       const figStr = `Сл.${p.figIndex}`
       currentPage.drawText(figStr, { x: cellX + 8, y: capY - CAP_H + 14, size: 7.5, font: fontB, color: C.accent })
 
-      // Caption text
+      // Caption text — wrapped to 2 lines (previously hard-truncated to 1)
       const capText = p.caption || ''
-      const capLines = wrapText(capText, fontR, 8, CELL_W - 40)
-      currentPage.drawText(capLines[0] ?? '', { x: cellX + 34, y: capY - 10, size: 8, font: fontR, color: C.ink })
-      currentPage.drawText(p.visitDate, { x: cellX + 34, y: capY - 22, size: 7.5, font: fontR, color: C.muted })
+      const capLines = capText ? wrapText(capText, fontR, 8, CELL_W - 40) : []
+      capLines.slice(0, 2).forEach((line, li) => {
+        currentPage.drawText(line, { x: cellX + 34, y: capY - 10 - li * 10, size: 8, font: fontR, color: C.ink })
+      })
+
+      // Metadata line: date + visit reference
+      const metaStr = p.visitNumber != null
+        ? `${formatDate(p.visitDate)} · Посета бр. ${p.visitNumber}`
+        : formatDate(p.visitDate)
+      currentPage.drawText(metaStr, { x: cellX + 34, y: capY - CAP_H + 8, size: 7.5, font: fontR, color: C.muted })
 
       col++
       if (col >= COLS) {
